@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tool lấy alt hàng loạt</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--mut:#6b7280;--line:#e3e6eb;--pri:#d6336c;--pri2:#fde8ef;--ok:#1a7f37;--warn:#b45309;--bad:#c62828}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+.ver{color:var(--mut);font-size:12px}
+main{padding:16px 20px;max-width:1300px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:#fff;color:var(--ink);padding:7px 14px;border-radius:7px;cursor:pointer;font:inherit}
+.btn:hover{border-color:var(--pri)}
+.btn.pri{background:var(--pri);border-color:var(--pri);color:#fff}
+.btn:disabled{opacity:.45;cursor:default}
+.mut{color:var(--mut)}
+#drop{border:2px dashed var(--line);border-radius:10px;padding:22px;text-align:center;color:var(--mut);margin-top:10px}
+#drop.on{border-color:var(--pri);background:var(--pri2);color:var(--pri)}
+label.chk{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+table{width:100%;border-collapse:collapse;background:var(--card)}
+th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+th{position:sticky;top:0;background:#fafbfc;font-weight:600;z-index:1}
+td.alt{white-space:pre-wrap}
+td.alt .h1{font-weight:600}
+td.n{width:44px;color:var(--mut)}
+td.c{width:64px;text-align:center}
+tr.bad td{background:#fff5f5}
+.tag{display:inline-block;font-size:12px;padding:1px 7px;border-radius:9px;background:#fef3c7;color:var(--warn);margin:2px 4px 0 0}
+.tag.bad{background:#fde2e2;color:var(--bad)}
+.path{color:var(--mut);font-size:12px}
+#toast{position:fixed;right:18px;bottom:18px;background:#1d2330;color:#fff;padding:9px 14px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:1}
+.wrap{max-height:70vh;overflow:auto;border:1px solid var(--line);border-radius:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tool lấy alt hàng loạt</h1>
+</header>
+<main>
+  <div class="card">
+    <div class="row">
+      <label class="btn pri">Chọn thư mục<input type="file" id="fDir" webkitdirectory multiple hidden></label>
+      <label class="btn">Chọn file .docx<input type="file" id="fFiles" accept=".docx" multiple hidden></label>
+      <label class="chk"><input type="checkbox" id="optH1" checked> Kèm H1 ở dòng đầu</label>
+      <label class="chk"><input type="checkbox" id="optAdd"> Nạp thêm (không xóa bảng cũ)</label>
+      <span id="info" class="mut"></span>
+    </div>
+    <div id="drop">Hoặc kéo thả thư mục / file .docx vào đây</div>
+    <p class="mut" style="margin:8px 0 0">Tên bài: docx nằm thẳng trong thư mục đã chọn → tên file. Docx nằm trong thư mục con → tên thư mục con (docx "Tài liệu không có tiêu đề" vẫn được). Đọc thư mục con 3 tầng.</p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button class="btn pri" id="cpAll" disabled>Copy bảng (Tên bài + Alt)</button>
+      <button class="btn" id="cpAlt" disabled>Copy chỉ cột Alt</button>
+      <button class="btn" id="cpName" disabled>Copy chỉ cột Tên bài</button>
+      <button class="btn" id="dlX" disabled>Tải .xlsx</button>
+      <span style="flex:1"></span>
+      <label class="chk">Sắp xếp <select id="sort"><option value="name">Theo tên (số tự nhiên)</option><option value="read">Theo thứ tự đọc</option></select></label>
+      <button class="btn" id="clear">Xóa bảng</button>
+    </div>
+    <p class="mut" style="margin:8px 0 0">Copy rồi bấm vào ô đầu trong Google Sheet → Ctrl+V. Mỗi bài 1 hàng, các Alt nằm chung 1 ô, mỗi Alt 1 dòng.</p>
+  </div>
+
+  <div class="wrap"><table>
+    <thead><tr><th>#</th><th>Tên bài</th><th>Alt</th><th>Số alt</th></tr></thead>
+    <tbody id="tb"><tr><td colspan="4" class="mut">Chưa có bài nào.</td></tr></tbody>
+  </table></div>
+</main>
+<div id="toast"></div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('on'),2200)};
+let ROWS=[],SEQ=0;
+
+/* ===== Đọc docx (giống tool làm ảnh) ===== */
+const W_NS='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const cleanText=s=>{let t=String(s||'').replace(/\s+/g,' ').trim(),o;do{o=t;t=t.replace(/^[•·*\-–—:;,.\/\s：，；、。]+/,'').replace(/[\-–—:;,.。\/\s：，；、]+$/,'')}while(t!==o);return t};
+const noAcc=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D');
+const norm=s=>noAcc(String(s||'').toLowerCase()).replace(/[^a-z0-9ঀ-৿぀-ヿ㐀-鿿]+/g,' ').trim();
+async function unzip(buf,wanted){
+  const dv=new DataView(buf);let e=buf.byteLength-22;
+  while(e>=0&&dv.getUint32(e,true)!==0x06054b50)e--;
+  if(e<0)throw new Error('Không phải file docx hợp lệ');
+  const n=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);const out={};const td=new TextDecoder();
+  for(let i=0;i<n;i++){
+    const method=dv.getUint16(p+10,true),cs=dv.getUint32(p+20,true),nl=dv.getUint16(p+28,true),xl=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),lo=dv.getUint32(p+42,true);
+    const name=td.decode(new Uint8Array(buf,p+46,nl));p+=46+nl+xl+cl;
+    if(!wanted.includes(name))continue;
+    const lnl=dv.getUint16(lo+26,true),lxl=dv.getUint16(lo+28,true);
+    const data=new Uint8Array(buf,lo+30+lnl+lxl,cs);let bytes=data;
+    if(method===8)bytes=new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+    out[name]=td.decode(bytes);
+  }return out;
+}
+function wChild(el,name){if(!el)return null;for(const c of el.children)if(c.namespaceURI===W_NS&&c.localName===name)return c;return null}
+const wVal=el=>el?el.getAttributeNS(W_NS,'val'):null;
+const isOn=el=>!!el&&!['0','false','none'].includes(wVal(el)||'');
+async function parseDocx(buf){
+  const f=await unzip(buf,['word/document.xml','word/styles.xml']);
+  if(!f['word/document.xml'])throw new Error('Không thấy nội dung bài');
+  const dp=new DOMParser();const styles={};
+  if(f['word/styles.xml']){
+    const sd=dp.parseFromString(f['word/styles.xml'],'application/xml');
+    for(const st of sd.getElementsByTagNameNS(W_NS,'style')){
+      const id=st.getAttributeNS(W_NS,'styleId');const nm=(wVal(wChild(st,'name'))||'').toLowerCase();
+      const ol=wVal(wChild(wChild(st,'pPr'),'outlineLvl'));let lvl=0;const m=nm.match(/heading\s*(\d)/);
+      if(m)lvl=+m[1];else if(nm==='title')lvl=1;else if(ol!=null&&+ol<9)lvl=+ol+1;
+      styles[id]={lvl,italic:isOn(wChild(wChild(st,'rPr'),'i')),based:wVal(wChild(st,'basedOn'))};
+    }
+  }
+  const stLvl=id=>{let s=styles[id],g=0;while(s&&!s.lvl&&s.based&&g++<5)s=styles[s.based];return s?s.lvl:0};
+  const doc=dp.parseFromString(f['word/document.xml'],'application/xml');
+  const paras=[];
+  for(const p of doc.getElementsByTagNameNS(W_NS,'p')){
+    const pPr=wChild(p,'pPr');const sid=wVal(wChild(pPr,'pStyle'));
+    let lvl=sid?stLvl(sid):0;const pol=wVal(wChild(pPr,'outlineLvl'));if(!lvl&&pol!=null&&+pol<9)lvl=+pol+1;
+    const pItal=sid&&styles[sid]&&styles[sid].italic;
+    let text='',itText='',allIt=true,anyIt=false,allB=true,any=false;
+    for(const r of p.getElementsByTagNameNS(W_NS,'r')){
+      let t='';for(const c of r.children){if(c.namespaceURI!==W_NS)continue;if(c.localName==='t')t+=c.textContent;else if(c.localName==='tab'||c.localName==='br')t+=' '}
+      if(!t)continue;text+=t;if(!t.trim())continue;any=true;
+      const rPr=wChild(r,'rPr');const iEl=wChild(rPr,'i');const rs=wVal(wChild(rPr,'rStyle'));
+      const it=iEl?isOn(iEl):(pItal||(rs&&styles[rs]&&styles[rs].italic));if(!it){allIt=false;itText+=' '}else{anyIt=true;itText+=t}
+      if(!isOn(wChild(rPr,'b')))allB=false;
+    }
+    text=text.replace(/\s+/g,' ').trim();if(!text)continue;
+    paras.push({text,itText:itText.replace(/\s+/g,' ').trim(),lvl,italic:any&&allIt,anyItalic:anyIt,bold:any&&allB});
+  }
+  const h1p=paras.find(p=>p.lvl===1)||paras.find(p=>p.bold);
+  const h1=h1p?cleanText(h1p.text):'';
+  // đoạn có chữ nghiêng là Alt (bỏ tiêu đề); đoạn thường có câu nghiêng → chỉ lấy phần nghiêng; > 40 chữ là thân bài; "(ghi chú)" bỏ
+  const altOf=p=>{const t=cleanText(p.italic?p.text:p.itText);const n=t.split(/\s+/).filter(Boolean).length;return n>=2&&n<=40&&!/^[(\[].*[)\]]$/.test(t)?t:''};
+  const alts=paras.filter(p=>p.anyItalic&&!p.lvl&&p!==h1p&&altOf(p)).map(altOf);
+  return{h1,alts};
+}
+
+/* ===== Gom file, đặt tên bài ===== */
+const GENERIC_DOC=/^(tài liệu không có tiêu đề|tai lieu khong co tieu de|untitled document|untitled|document|bản sao của|copy of|new document|doc\d*)\b/i;
+const isDocx=n=>/\.docx$/i.test(n)&&!n.startsWith('~$');
+// items: [{file, rel:'thu-muc-goc/con/ten.docx'}] — bỏ tầng gốc, tối đa 3 tầng con
+function nameItems(items){
+  const byDir=new Map();
+  for(const it of items){const parts=it.rel.split('/').filter(Boolean);const fname=parts.pop();const dirs=parts.slice(it.rootIncluded?1:0);
+    if(dirs.length>3)continue;const key=dirs.join('/');if(!byDir.has(key))byDir.set(key,[]);byDir.get(key).push({file:it.file,fname,dirs})}
+  const out=[];
+  for(const [key,list] of byDir){for(const x of list){const base=x.fname.replace(/\.docx$/i,'');let name=base;
+    if(x.dirs.length){const dn=x.dirs[x.dirs.length-1];name=(list.length===1||GENERIC_DOC.test(base)||norm(base)===norm(dn))?dn:dn+' - '+base}
+    out.push({file:x.file,name,path:(key?key+'/':'')+x.fname})}}
+  return out;
+}
+async function loadItems(items){
+  if(!$('#optAdd').checked){ROWS=[];SEQ=0}
+  const list=nameItems(items.filter(it=>isDocx(it.file.name)));
+  if(!list.length){toast('Không thấy file .docx nào');render();return}
+  let i=0;
+  for(const x of list){i++;$('#info').textContent=`Đang đọc ${i}/${list.length}…`;
+    const row={seq:SEQ++,name:x.name,path:x.path,h1:'',alts:[],err:''};
+    try{const r=await parseDocx(await x.file.arrayBuffer());row.h1=r.h1;row.alts=r.alts}catch(e){row.err=e.message||'Lỗi đọc file'}
+    ROWS.push(row)}
+  render();
+  const bad=ROWS.filter(r=>r.err||!r.alts.length).length;
+  $('#info').textContent=`${ROWS.length} bài · ${ROWS.reduce((a,r)=>a+r.alts.length,0)} alt`+(bad?` · ${bad} bài cần xem lại`:'');
+}
+
+/* ===== Bảng ===== */
+const coll=new Intl.Collator('vi',{numeric:true,sensitivity:'base'});
+const sorted=()=>$('#sort').value==='name'?[...ROWS].sort((a,b)=>coll.compare(a.name,b.name)||coll.compare(a.path,b.path)):[...ROWS].sort((a,b)=>a.seq-b.seq);
+const linesOf=r=>($('#optH1').checked&&r.h1?[r.h1]:[]).concat(r.alts);
+function render(){
+  const tb=$('#tb');const rs=sorted();
+  ['#cpAll','#cpAlt','#cpName','#dlX'].forEach(id=>$(id).disabled=!rs.length);
+  if(!rs.length){tb.innerHTML='<tr><td colspan="4" class="mut">Chưa có bài nào.</td></tr>';return}
+  tb.innerHTML=rs.map((r,i)=>{const showH1=$('#optH1').checked&&r.h1;
+    const tags=(r.err?`<span class="tag bad">${esc(r.err)}</span>`:'')+(!r.err&&!r.h1?'<span class="tag">không thấy H1</span>':'')+(!r.err&&!r.alts.length?'<span class="tag bad">không có alt in nghiêng</span>':'');
+    return `<tr class="${r.err||!r.alts.length?'bad':''}"><td class="n">${i+1}</td><td>${esc(r.name)}<div class="path">${esc(r.path)}</div>${tags}</td>
+      <td class="alt">${showH1?`<div class="h1">${esc(r.h1)}</div>`:''}${r.alts.map(a=>`<div>${esc(a)}</div>`).join('')}</td><td class="c">${r.alts.length}</td></tr>`}).join('');
+}
+
+/* ===== Copy sang Sheet: text/html (ô có xuống dòng) + TSV dự phòng ===== */
+const tsvCell=s=>/[\t\n"]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
+async function copyCols(cols){
+  const rs=sorted();
+  const cells=r=>cols.map(c=>c==='name'?r.name:linesOf(r).join('\n'));
+  const html='<table>'+rs.map(r=>'<tr>'+cells(r).map(v=>`<td>${esc(v).replace(/\n/g,'<br>')}</td>`).join('')+'</tr>').join('')+'</table>';
+  const tsv=rs.map(r=>cells(r).map(tsvCell).join('\t')).join('\n');
+  try{await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([tsv],{type:'text/plain'})})])}
+  catch(e){const ta=document.createElement('textarea');ta.value=tsv;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove()}
+  toast(`Đã copy ${rs.length} hàng, giờ dán vào Sheet nhé`);
+}
+$('#cpAll').onclick=()=>copyCols(['name','alt']);
+$('#cpAlt').onclick=()=>copyCols(['alt']);
+$('#cpName').onclick=()=>copyCols(['name']);
+
+/* ===== Xuất .xlsx (tự đóng gói, không cần thư viện) ===== */
+const CRC=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+const crc32=b=>{let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=CRC[(c^b[i])&255]^(c>>>8);return(c^0xFFFFFFFF)>>>0};
+function zip(files){const enc=new TextEncoder(),parts=[],cen=[];let off=0;
+  for(const [name,str] of files){const nb=enc.encode(name),data=enc.encode(str),crc=crc32(data);
+    const lh=new DataView(new ArrayBuffer(30));lh.setUint32(0,0x04034b50,true);lh.setUint16(4,20,true);lh.setUint16(6,0x0800,true);lh.setUint32(14,crc,true);lh.setUint32(18,data.length,true);lh.setUint32(22,data.length,true);lh.setUint16(26,nb.length,true);
+    parts.push(lh,nb,data);
+    const ch=new DataView(new ArrayBuffer(46));ch.setUint32(0,0x02014b50,true);ch.setUint16(4,20,true);ch.setUint16(6,20,true);ch.setUint16(8,0x0800,true);ch.setUint32(16,crc,true);ch.setUint32(20,data.length,true);ch.setUint32(24,data.length,true);ch.setUint16(28,nb.length,true);ch.setUint32(42,off,true);
+    cen.push(ch,nb);off+=30+nb.length+data.length}
+  const cs=cen.reduce((a,x)=>a+(x.byteLength||x.length),0);
+  const end=new DataView(new ArrayBuffer(22));end.setUint32(0,0x06054b50,true);end.setUint16(8,files.length,true);end.setUint16(10,files.length,true);end.setUint32(12,cs,true);end.setUint32(16,off,true);
+  return new Blob([...parts,...cen,end],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})}
+const xe=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g,'');
+function xlsx(){
+  const rs=sorted();const col=i=>String.fromCharCode(65+i);
+  const cell=(r,c,v,s)=>`<c r="${col(c)}${r}" t="inlineStr"${s?` s="${s}"`:''}><is><t xml:space="preserve">${xe(v)}</t></is></c>`;
+  let rows=`<row r="1">${cell(1,0,'Tên bài',2)}${cell(1,1,'Alt',2)}${cell(1,2,'Số alt',2)}</row>`;
+  rs.forEach((r,i)=>{const n=i+2;rows+=`<row r="${n}">${cell(n,0,r.name,1)}${cell(n,1,linesOf(r).join('\n'),1)}<c r="C${n}"><v>${r.alts.length}</v></c></row>`});
+  const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="1" width="45" customWidth="1"/><col min="2" max="2" width="90" customWidth="1"/><col min="3" max="3" width="8" customWidth="1"/></cols><sheetData>${rows}</sheetData></worksheet>`;
+  const styles=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="3"><xf/><xf applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf><xf fontId="1" applyFont="1"/></cellXfs></styleSheet>`;
+  return zip([
+    ['[Content_Types].xml','<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
+    ['_rels/.rels','<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ['xl/workbook.xml','<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Alt" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+    ['xl/_rels/workbook.xml.rels','<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
+    ['xl/worksheets/sheet1.xml',sheet],['xl/styles.xml',styles]]);
+}
+$('#dlX').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(xlsx());const d=new Date();
+  a.download=`alt-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}.xlsx`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000)};
+
+/* ===== Nạp: nút chọn / kéo thả ===== */
+$('#fDir').onchange=e=>{const fs=[...e.target.files];loadItems(fs.map(f=>({file:f,rel:f.webkitRelativePath||f.name,rootIncluded:true})));e.target.value=''};
+$('#fFiles').onchange=e=>{loadItems([...e.target.files].map(f=>({file:f,rel:f.name})));e.target.value=''};
+const drop=$('#drop');
+['dragenter','dragover'].forEach(t=>document.addEventListener(t,e=>{e.preventDefault();drop.classList.add('on')}));
+['dragleave','drop'].forEach(t=>document.addEventListener(t,e=>{e.preventDefault();if(t==='drop'||e.target===drop)drop.classList.remove('on')}));
+const fileOf=en=>new Promise((res,rej)=>en.file(res,rej));
+const readAll=rd=>new Promise((res,rej)=>{const all=[];const next=()=>rd.readEntries(b=>{if(!b.length)res(all);else{all.push(...b);next()}},rej);next()});
+async function walk(en,path,out,depth){
+  if(en.isFile){if(isDocx(en.name))out.push({file:await fileOf(en),rel:path+en.name});return}
+  if(en.isDirectory&&depth<=4&&!en.name.startsWith('.'))for(const c of await readAll(en.createReader()))await walk(c,path+en.name+'/',out,depth+1);
+}
+document.addEventListener('drop',async e=>{const ens=[...e.dataTransfer.items].map(i=>i.webkitGetAsEntry&&i.webkitGetAsEntry()).filter(Boolean);const out=[];
+  const one=ens.length===1&&ens[0].isDirectory;
+  for(const en of ens)await walk(en,'',out,0);
+  // thả 1 thư mục → coi như chọn thư mục đó (tầng gốc bỏ đi); thả nhiều thứ → mỗi thư mục thả vào là 1 tầng con
+  loadItems(out.map(x=>({...x,rootIncluded:one})))});
+
+$('#optH1').onchange=render;$('#sort').onchange=render;
+$('#clear').onclick=()=>{ROWS=[];SEQ=0;$('#info').textContent='';render()};
+window.__T={parseDocx,nameItems,ROWS:()=>ROWS,xlsx,linesOf};
+</script>
+</body>
+</html>
